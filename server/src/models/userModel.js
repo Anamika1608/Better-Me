@@ -4,12 +4,12 @@ import bcrypt from 'bcryptjs';
 const userSchema = new mongoose.Schema({
     name: {
         type: String,
-        required: true,
+        // required: true,
         trim: true,
     },
     profilePicture: {
         type: String,
-        required: true,
+        // required: true,
     },
     dob: {
         type: Date,
@@ -66,6 +66,11 @@ const userSchema = new mongoose.Schema({
             }
         }],
         default: [{}],  // Ensure default structure for both `currentSelf` and `imagineSelf`
+    },
+    role: {
+        type: String,
+        enum: ['user', 'expert', 'superAdmin' , 'artist'],
+        // required: true
     }
 }, { timestamps: true });
 
