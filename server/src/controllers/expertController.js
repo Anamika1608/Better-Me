@@ -6,9 +6,11 @@ import ApiError from '../utils/ApiError.js';
 import uploadOnCloudinary from '../utils/cloudinary.js';
 import User from '../models/userModel.js';
 import PendingUser from '../models/pendingUserModel.js';
-
+import moment from "moment";
 import jwt from "jsonwebtoken"
-
+import SuperAdmin from '../models/superAdmin.js';
+import Artist from '../models/artistModel.js'
+import Employee from '../models/employeeModel.js';
 
 const JWT_SECRET = process.env.JWT_SECRET;
 
@@ -87,7 +89,7 @@ export const editMasterclass = async (req, res) => {
             return res.status(200).json(new ApiResponse(400, null, "Materclass not updated"));
         }
 
-        return res.status(200).json(new ApiResponse(200, null, "Masterclass updated successfully"));
+        return res.status(200).json(new ApiResponse(200, updatedClass, "Masterclass updated successfully"));
     } catch (error) {
         console.error('Error updating masterclass:', error);
         throw new ApiError(500, "Internal server error", [error.message]);
@@ -96,22 +98,41 @@ export const editMasterclass = async (req, res) => {
 
 export const deleteMasterClass = async (req, res) => {
     try {
+        let expert = null;
+
+        if (req.user.role !== "superAdmin") {
+            const userId = req.user.id;
+            expert = await Expert.findOne({ user: userId });
+        } else {
+            const expertId = req.params.expertId;
+            expert = await Expert.findById(expertId);
+        }
+
+        console.log(expert);
+
         const classId = req.params.classId;
 
-        if (!classId) return res.status(200).json(new ApiResponse(400, null, "Masterclass id is required"));
+        if (!classId) {
+            return res.status(400).json(new ApiResponse(400, null, "Masterclass ID is required"));
+        }
 
         const deleteClass = await Masterclass.findByIdAndDelete(classId);
 
         if (!deleteClass) {
-            return res.status(200).json(new ApiResponse(400, null, "Materclass not deleted"));
+            return res.status(400).json(new ApiResponse(400, null, "Masterclass not deleted"));
         }
+
+        await Expert.updateOne(
+            { _id: expert._id },
+            { $pull: { masterclasses: classId } }
+        );
 
         return res.status(200).json(new ApiResponse(200, null, "Masterclass deleted successfully"));
     } catch (error) {
-        console.error('Error deleting masterclass:', error);
+        console.error("Error deleting masterclass:", error);
         throw new ApiError(500, "Internal server error", [error.message]);
     }
-}
+};
 
 export const verifyExpertEmail = async (req, res) => {
     const { email, otp } = req.body;
@@ -153,7 +174,9 @@ export const verifyExpertEmail = async (req, res) => {
             }
 
             const result = await uploadOnCloudinary(pendingUser.filepath);
-            console.log(result)
+            if (!result || !result.secure_url) {
+                return res.status(500).json(new ApiError(500, "Failed to upload profile picture to Cloudinary"));
+            }
 
             const userRole = pendingUser.role;
             const newUser = new User({
@@ -161,7 +184,7 @@ export const verifyExpertEmail = async (req, res) => {
                 email: pendingUser.email,
                 password: pendingUser.password,
                 role: userRole,
-                profilePicture: result.secure_url,
+                profilePicture: result?.secure_url,
             });
 
             await newUser.save();
@@ -184,6 +207,12 @@ export const verifyExpertEmail = async (req, res) => {
                 });
 
                 await newArtist.save()
+            } else if (userRole == "employee") {
+                const newEmployee = new Employee({
+                    user: newUser._id
+                });
+
+                await newEmployee.save()
             }
 
             await PendingUser.deleteOne({ email });
@@ -240,7 +269,13 @@ export const verifyExpertNumber = async (req, res) => {
             }
 
             const result = await uploadOnCloudinary(pendingUser.filepath);
+
             const userRole = pendingUser.role;
+
+            if (!result || !result.secure_url) {
+                return res.status(500).json(new ApiError(500, "Failed to upload profile picture to Cloudinary"));
+            }
+
             const newUser = new User({
                 name: pendingUser.name,
                 phoneNumber: pendingUser.phoneNumber,
@@ -270,6 +305,12 @@ export const verifyExpertNumber = async (req, res) => {
                 });
 
                 await newArtist.save()
+            }else if (userRole == "employee") {
+                const newEmployee = new Employee({
+                    user: newUser._id
+                });
+
+                await newEmployee.save()
             }
 
 
@@ -289,14 +330,21 @@ export const verifyExpertNumber = async (req, res) => {
 
 export const updateExpertProfile = async (req, res) => {
     try {
-        let expertId = "";
-        if (req.user.role !== "superAdmin") expertId = req.user.id;
-        else expertId = req.params.id;
-
+        let expert = null;
+        if (req.user.role !== "superAdmin") {
+            const userId = req.user.id
+            expert = await Expert.findOne({ user: userId });
+        } else {
+            const expertId = req.params.expertId;
+            expert = await Expert.findById(expertId);
+        }
+        console.log(expert)
+        let updatedUser = null;
+        let updatedExpert = null;
         const userUpdates = {};
         const expertUpdates = {};
         const userAllowedUpdates = ['name', 'profileName', 'age', 'gender', 'email', 'phone'];
-        const expertAllowedUpdates = ['expertise', 'topRated'];
+        const expertAllowedUpdates = ['expertise', 'topRated', 'expertTag'];
 
         userAllowedUpdates.forEach(field => {
             if (req.body[field] !== undefined) {
@@ -310,14 +358,13 @@ export const updateExpertProfile = async (req, res) => {
             }
         });
 
-        const expert = await Expert.findById(expertId);
         if (!expert) {
             return res.status(200).json(new ApiResponse(404, null, "Expert not found"));
         }
 
         if (Object.keys(userUpdates).length > 0) {
             const userId = expert.user.toString();
-            const updatedUser = await User.findByIdAndUpdate(userId, userUpdates, {
+            updatedUser = await User.findByIdAndUpdate(userId, userUpdates, {
                 new: true,
                 runValidators: true
             });
@@ -328,26 +375,19 @@ export const updateExpertProfile = async (req, res) => {
         }
 
         if (Object.keys(expertUpdates).length > 0) {
-            await Expert.findByIdAndUpdate(expertId, expertUpdates, {
+            updatedExpert = await Expert.findByIdAndUpdate(expert._id, expertUpdates, {
                 new: true,
                 runValidators: true
             });
         }
 
-        if (req.body.expertTag) {
-            await Expert.findOneAndUpdate(
-                { user: expert.user.toString() },
-                { expertTag: req.body.expertTag },
-                { new: true, runValidators: true }
-            );
-        }
-
-        return res.status(200).json(new ApiResponse(200, null, "Expert Profile updated successfully"));
+        return res.status(200).json(new ApiResponse(200, updatedExpert, updatedUser, "Expert Profile updated successfully"));
     } catch (error) {
         console.error('Error updating profile:', error);
         throw new ApiError(500, "Internal server error", [error.message]);
     }
 };
+
 
 export const trackMasterclassView = async (req, res) => {
     try {
@@ -438,32 +478,22 @@ export const getMasterclassViews = async (req, res) => {
 
 export const deleteExpertProfile = async (req, res) => {
     try {
-        let userId = null;
-        let userRole = null;
-        if (req.user && req.user.role !== "superAdmin") {
-            userId = req.user.id;
-            userRole = req.user.role;
+        let expert = null;
+        if (req.user.role !== "superAdmin") {
+            const userId = req.user.id
+            expert = await Expert.findOne({ user: userId });
         } else {
-            userId = req.params.id;
-            userRole = req.body.userRole;
+            const expertId = req.params.expertId;
+            expert = await Expert.findById(expertId);
         }
 
-        if (!userId) {
-            return res.status(400).json(new ApiResponse(400, null, "User ID is required"));
-        }
+        const deleteExpert = await Expert.findByIdAndDelete(expert._id);
 
-        let deleteUserRole = null;
-        if (userRole === "expert") {
-            deleteUserRole = await Expert.findByIdAndDelete(userId);
-        } else if (userRole === "artist") {
-            deleteUserRole = await Artist.findByIdAndDelete(userId);
-        }
-
-        if (!deleteUserRole) {
+        if (!deleteExpert) {
             return res.status(200).json(new ApiResponse(404, null, "User not found in the specified role"));
         }
 
-        const deleteUser = await User.findByIdAndDelete(deleteUserRole.user.toString());
+        const deleteUser = await User.findByIdAndDelete(expert.user.toString());
 
         if (!deleteUser) {
             return res.status(200).json(new ApiResponse(404, null, "User not found"));
@@ -475,3 +505,253 @@ export const deleteExpertProfile = async (req, res) => {
         throw new ApiError(500, "Internal server error", [error.message]);
     }
 };
+
+export const deleteArtistProfile = async (req, res) => {
+    try {
+        let artist = null;
+        if (req.user.role !== "superAdmin") {
+            const userId = req.user.id
+            artist = await Artist.findOne({ user: userId });
+        } else {
+            const artistId = req.params.artistId;
+            artist = await Artist.findById(artistId);
+        }
+
+        const deleteArtist = await Artist.findByIdAndDelete(artist._id);
+
+        if (!deleteArtist) {
+            return res.status(200).json(new ApiResponse(404, null, "User not found in the specified role"));
+        }
+
+        const deleteUser = await User.findByIdAndDelete(artist.user.toString());
+
+        if (!deleteUser) {
+            return res.status(200).json(new ApiResponse(404, null, "User not found"));
+        }
+
+        return res.status(200).json(new ApiResponse(200, "User deleted successfully"));
+    } catch (error) {
+        console.error('Error deleting profile:', error);
+        throw new ApiError(500, "Internal server error", [error.message]);
+    }
+};
+// about us 
+export const updateAbout = async (req, res) => {
+    try {
+        let expert = null;
+        if (req.user.role !== "superAdmin") {
+            const userId = req.user.id
+            expert = await Expert.findOne({ user: userId });
+        } else {
+            const expertId = req.params.expertId;
+            expert = await Expert.findById(expertId);
+        }
+        const { about } = req.body;
+
+        expert.about = about
+
+        res.status(200).json(new ApiResponse(200, { about: expert.about }, 'About section updated successfully'));
+    } catch (error) {
+        console.error('Error in updateAbout:', error);
+        res.status(500).json(new ApiError(500, 'Failed to update about section'));
+    }
+};
+
+// Education 
+export const addEducation = async (req, res) => {
+    try {
+        const { school, degree, startyr, endyr } = req.body;
+        const expertId = req.user.id;
+
+        const expert = await Expert.findOne({ user: expertId });
+        if (!expert) {
+            return res.status(404).json(new ApiResponse(404, null, 'Expert not found.'));
+        }
+
+        expert.education.push({ school, degree, startyr, endyr });
+        await expert.save();
+
+        res.status(201).json(new ApiResponse(201, expert.education, 'Education added successfully'));
+    } catch (error) {
+        console.error('Error in addEducation:', error);
+        res.status(error.statusCode || 500).json(new ApiError(error.statusCode || 500, error.message));
+    }
+};
+export const editEducation = async (req, res) => {
+    try {
+        let expert = null;
+        if (req.user.role !== "superAdmin") {
+            const userId = req.user.id
+            expert = await Expert.findOne({ user: userId });
+        } else {
+            const expertId = req.params.expertId;
+            expert = await Expert.findById(expertId);
+        }
+        console.log(expert)
+        const educationId = req.params.educationId
+        // const { school, degree, startyr, endyr } = req.body;
+        const updateData = req.body;
+        if (!expert) {
+            return res.status(404).json(new ApiResponse(404, null, 'Expert not found.'));
+        }
+
+        // Find the specific education entry by ID
+        const education = expert.education.id(req.params.educationId);
+        if (!education) {
+            return res.status(404).json(new ApiResponse(404, null, 'Education entry not found.'));
+        }
+
+        // Update fields if provided
+        // if (school !== undefined) education.school = school;
+        // if (degree !== undefined) education.degree = degree;
+        // if (startyr !== undefined) education.startyr = startyr;
+        // if (endyr !== undefined) education.endyr = endyr;
+        Object.keys(updateData).forEach(key => {
+            if (updateData[key] !== undefined) {
+                education[key] = updateData[key]; // Update only if the field is defined
+            }
+        });
+        await expert.save();
+        res.status(200).json(new ApiResponse(200, expert.education, 'Education updated successfully'));
+    } catch (error) {
+        console.error('Error in editEducation:', error);
+        res.status(error.statusCode || 500).json(new ApiError(error.statusCode || 500, error.message));
+    }
+};
+
+export const deleteEducation = async (req, res) => {
+    try {
+        let expert = null;
+        if (req.user.role !== "superAdmin") {
+            const userId = req.user.id
+            expert = await Expert.findOne({ user: userId });
+        } else {
+            const expertId = req.params.expertId;
+            expert = await Expert.findById(expertId);
+        }
+        console.log(expert)
+        const educationId = req.params.educationId
+
+        if (!expert) {
+            return res.status(404).json(new ApiResponse(404, null, 'Expert not found.'));
+        }
+
+        const education = expert.education.map((m) => m._id == educationId);
+        console.log(education);
+        if (!education) {
+            return res.status(404).json(new ApiResponse(404, null, 'Education entry not found.'));
+        }
+
+        expert.education.pull({ _id: educationId });
+        await expert.save();
+
+        res.status(200).json(new ApiResponse(200, expert.education, 'Education deleted successfully'));
+    } catch (error) {
+        console.error('Error in deleteEducation:', error);
+        res.status(error.statusCode || 500).json(new ApiError(error.statusCode || 500, error.message));
+    }
+};
+// certication 
+export const addCertification = async (req, res) => {
+    try {
+        const { title } = req.body;
+        const expertId = req.user.id;
+
+        if (!req.file) {
+            return res.status(400).json(new ApiResponse(400, null, 'No image file uploaded.'));
+        }
+
+        const result = await uploadOnCloudinary(req.file.path);
+        if (!result) {
+            throw new ApiError(500, 'Failed to upload image to Cloudinary.');
+        }
+
+        const expert = await Expert.findOne({ user: expertId });
+        if (!expert) {
+            return res.status(404).json(new ApiResponse(404, null, 'Expert not found.'));
+        }
+
+        expert.certification.push({
+            title,
+            image: result.secure_url,
+        });
+        await expert.save();
+
+        res.status(201).json(new ApiResponse(201, expert.certification, 'Certification added successfully'));
+    } catch (error) {
+        console.error('Error in addCertification:', error);
+        res.status(error.statusCode || 500).json(new ApiError(error.statusCode || 500, error.message));
+    }
+};
+export const editCertification = async (req, res) => {
+    try {
+        let expert = null;
+        if (req.user.role !== "superAdmin") {
+            const userId = req.user.id
+            expert = await Expert.findOne({ user: userId });
+        } else {
+            const expertId = req.params.expertId;
+            expert = await Expert.findById(expertId);
+        }
+        const certificationId = req.params.certificationId
+        const { title } = req.body;
+
+        if (!expert) {
+            return res.status(404).json(new ApiResponse(404, null, 'Expert not found.'));
+        }
+
+        const certification = expert.certification.id(req.params.certificationId);
+        if (!certification) {
+            return res.status(404).json(new ApiResponse(404, null, 'Certification entry not found.'));
+        }
+
+        certification.title = title || certification.title;
+
+        // Update image if a new file is uploaded
+        if (req.file) {
+            const result = await uploadOnCloudinary(req.file.path);
+            if (!result) {
+                throw new ApiError(500, 'Failed to upload new image to Cloudinary.');
+            }
+            certification.image = result.secure_url;
+        }
+
+        await expert.save();
+        res.status(200).json(new ApiResponse(200, expert.certification, 'Certification updated successfully'));
+    } catch (error) {
+        console.error('Error in editCertification:', error);
+        res.status(error.statusCode || 500).json(new ApiError(error.statusCode || 500, error.message));
+    }
+};
+export const deleteCertification = async (req, res) => {
+    try {
+        let expert = null;
+        if (req.user.role !== "superAdmin") {
+            const userId = req.user.id
+            expert = await Expert.findOne({ user: userId });
+        } else {
+            const expertId = req.params.expertId;
+            expert = await Expert.findById(expertId);
+        }
+        const certificationId = req.params.certificationId
+
+        if (!expert) {
+            return res.status(404).json(new ApiResponse(404, null, 'Expert not found.'));
+        }
+
+        const certification = expert.certification.id(certificationId);
+        if (!certification) {
+            return res.status(404).json(new ApiResponse(404, null, 'Certification entry not found.'));
+        }
+
+        expert.certification.pull({ _id: certificationId });
+        await expert.save();
+
+        res.status(200).json(new ApiResponse(200, expert.certification, 'Certification deleted successfully'));
+    } catch (error) {
+        console.error('Error in deleteCertification:', error);
+        res.status(error.statusCode || 500).json(new ApiError(error.statusCode || 500, error.message));
+    }
+};
+
+

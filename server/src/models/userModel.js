@@ -69,7 +69,7 @@ const userSchema = new mongoose.Schema({
     },
     role: {
         type: String,
-        enum: ['user', 'expert', 'superAdmin' , 'artist'],
+        enum: ['user', 'expert', 'superAdmin' , 'artist' , 'employee'],
         // required: true
     }
 }, { timestamps: true });
