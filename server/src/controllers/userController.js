@@ -67,7 +67,7 @@ export const loginUserWithMail = async (req, res) => {
         const token = jwt.sign({ id: user._id.toString() }, JWT_SECRET, { expiresIn: "12h" });
         res.cookie("token", token, { httpOnly: true });
 
-        return res.json(new ApiResponse(200, null, "Login successful."));
+        return res.json(new ApiResponse(200, user, "Login successful."));
     } catch (error) {
         console.error("Error during login with email:", error);
         throw new ApiError(500, "Internal server error", [error.message]);
@@ -145,7 +145,11 @@ export const registerUserWithMail = async (req, res) => {
         const otp = randomstring.generate({ length: 5, charset: '123456789' });
         const otpExpiration = new Date(Date.now() + 5 * 60 * 1000);
         if (existingPendingUser) {
-            await PendingUser.findOneAndUpdate({ email: email }, { otp, otpExpiration })
+            const updatedUser = await PendingUser.findOneAndUpdate(
+                { email: email },
+                { otp, otpExpiration, filepath, name } ,  { new: true }
+              );
+              
             await sendVerificationEmail(name, email, otp);
             return res.json(new ApiResponse(200, null, "OTP sent to your email. Please verify your email to complete registration."));
         }
@@ -214,7 +218,7 @@ export const loginUserWithNumber = async (req, res) => {
         const token = jwt.sign({ id: user._id.toString() }, JWT_SECRET, { expiresIn: "12h" });
         res.cookie("token", token, { httpOnly: true });
 
-        return res.json(new ApiResponse(200, null, "Login successful."));
+        return res.json(new ApiResponse(200, user, "Login successful."));
     } catch (error) {
         console.error("Error during login with email:", error);
         throw new ApiError(500, "Internal server error", [error.message]);
