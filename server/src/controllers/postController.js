@@ -110,11 +110,14 @@ export const getPostById = async (req, res) => {
 export const updatePost = async (req, res) => {
     try {
         const { postId } = req.params;
-        const { content, pictures } = req.body;
+        const { content } = req.body;
+
+        console.log(postId);
+        console.log(content)
 
         const updatedPost = await Post.findByIdAndUpdate(
             postId,
-            { content, pictures },
+            { content },
             { new: true, runValidators: true }
         );
 
@@ -157,13 +160,15 @@ export const likePost = async (req, res) => {
             return res.status(404).json(new ApiResponse(404, "Post not found"));
         }
 
-        const alreadyLiked = post.likes.some((like) => like.likedBy.toString() === userId);
+        const alreadyLiked = post.likes.likedBy.some(user => String(user) === String(userId));
 
         if (alreadyLiked) {
             return res.status(400).json(new ApiResponse(400, "User has already liked this post"));
         }
 
-        post.likes.push({ count: 1, likedBy: userId });
+        post.likes.count = (post.likes.count || 0) + 1;
+        post.likes.likedBy.push(userId);
+
         await post.save();
 
         return res.status(200).json(new ApiResponse(200, "Post liked successfully", post));
@@ -184,13 +189,14 @@ export const unlikePost = async (req, res) => {
             return res.status(404).json(new ApiResponse(404, "Post not found"));
         }
 
-        const likeIndex = post.likes.findIndex((like) => like.likedBy.toString() === userId);
-
+        const likeIndex = post.likes.likedBy.findIndex((user) => String(user) === String(userId));
         if (likeIndex === -1) {
             return res.status(400).json(new ApiResponse(400, "User has not liked this post"));
         }
 
-        post.likes.splice(likeIndex, 1);
+        post.likes.count = Math.max((post.likes.count || 0) - 1, 0);
+
+        post.likes.likedBy.splice(likeIndex, 1);
         await post.save();
 
         return res.status(200).json(new ApiResponse(200, "Post unliked successfully", post));
@@ -210,7 +216,7 @@ export const getLikesCount = async (req, res) => {
             return res.status(404).json(new ApiResponse(404, "Post not found"));
         }
 
-        const likesCount = post.likes.length;
+        const likesCount = post.likes.count || 0;
 
         return res.status(200).json(new ApiResponse(200, "Likes count retrieved successfully", { likesCount }));
     } catch (error) {
@@ -229,7 +235,7 @@ export const getUsersWhoLiked = async (req, res) => {
             return res.status(404).json(new ApiResponse(404, "Post not found"));
         }
 
-        const users = post.likes.map((like) => like.likedBy);
+        const users = post.likes.likedBy;
 
         return res.status(200).json(new ApiResponse(200, "Users who liked the post retrieved successfully", { users }));
     } catch (error) {
@@ -237,4 +243,3 @@ export const getUsersWhoLiked = async (req, res) => {
         return res.status(500).json(new ApiResponse(500, "Error retrieving users who liked the post", error));
     }
 };
-0
